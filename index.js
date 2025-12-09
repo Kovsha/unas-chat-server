@@ -1,35 +1,54 @@
 const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
+const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" } // UNAS oldalról engedélyezés
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
-// Statikus admin oldal kiszolgálása
-app.use(express.static('public'));
+let users = {}; // socketId => { socket, userType }
 
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+  console.log('User connected: ' + socket.id);
 
-  // Felhasználói üzenet
+  // Üzenet a felhasználótól
   socket.on('chat_message', (data) => {
-    console.log('Message from user:', data);
+    users[socket.id] = { socket, userType: 'user' };
+    console.log('Message from user:', { ...data, senderId: socket.id });
 
-    // Visszaküldjük minden kliensnek, hogy a felhasználó is lássa
-    io.emit('chat_message', data);
+    // Adminoknak továbbítjuk
+    for (let id in users) {
+      if(users[id].userType === 'admin'){
+        users[id].socket.emit('chat_message', {
+          text: data.text,
+          senderId: socket.id
+        });
+      }
+    }
   });
 
-  // Admin üzenet küldése a szerver felől
+  // Admin üzenet egy kiválasztott usernek
   socket.on('admin_message', (data) => {
+    if (!data.receiverId || !users[data.receiverId]) return;
     console.log('Admin sends:', data);
-    io.emit('chat_message', { text: data.text, sender: 'admin' });
+    users[data.receiverId].socket.emit('chat_message', { 
+      text: data.text, 
+      senderId: 'admin' 
+    });
   });
 
-  socket.on('disconnect', () => console.log('User disconnected:', socket.id));
+  // Admin csatlakozás
+  socket.on('register_admin', () => {
+    users[socket.id] = { socket, userType: 'admin' };
+    console.log('Admin connected: ' + socket.id);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('User disconnected: ' + socket.id);
+    delete users[socket.id];
+  });
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(3000, () => {
+  console.log('Server running on port 3000');
+});
