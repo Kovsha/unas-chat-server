@@ -6,76 +6,93 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
-let users = {}; // socketId => { socket, userType, name }
+// users: socketId => { socket, userType, name }
+// chatHistory: userName => [{ text, sender }]
+let users = {};
+let chatHistory = {};
 
 io.on('connection', (socket) => {
-  console.log('User connected: ' + socket.id);
+  console.log('Socket connected: ' + socket.id);
 
-  // Felhasználó regisztrálása névvel
+  // User regisztráció névvel
   socket.on('register_user', (data) => {
-    users[socket.id] = { socket, userType: 'user', name: data.name };
-    console.log(`User registered: ${data.name} (${socket.id})`);
-    
-    // Adminoknak jelezzük az új aktív usert
+    const name = data.name || socket.id;
+    users[socket.id] = { socket, userType: 'user', name };
+    if(!chatHistory[name]) chatHistory[name] = [];
+    console.log(`User registered: ${name} (${socket.id})`);
+
+    // Adminoknak küldjük az új aktív usert
     for (let id in users) {
       if(users[id].userType === 'admin'){
-        users[id].socket.emit('active_users', { socketId: socket.id, name: data.name });
+        users[id].socket.emit('active_users', { name });
       }
     }
   });
 
-  // Üzenet a felhasználótól
+  // User üzenet
   socket.on('chat_message', (data) => {
-    if(!users[socket.id]) return;
-    const senderName = users[socket.id].name || socket.id;
-    console.log('Message from user:', { text: data.text, senderId: senderName });
+    const user = users[socket.id];
+    if(!user || user.userType !== 'user') return;
 
-    // Adminoknak továbbítjuk
+    const msg = { text: data.text, sender: 'user', name: user.name };
+    chatHistory[user.name].push(msg);
+
+    console.log('Message from user:', msg);
+
+    // Küldés minden adminnak
     for (let id in users) {
       if(users[id].userType === 'admin'){
-        users[id].socket.emit('chat_message', {
-          text: data.text,
-          senderId: senderName
-        });
+        users[id].socket.emit('chat_message', msg);
       }
     }
   });
 
-  // Admin üzenet egy kiválasztott usernek
+  // Admin üzenet kiválasztott usernek
   socket.on('admin_message', (data) => {
-    if (!data.receiverName) return;
+    if(!data.receiverName || !users) return;
 
-    // Keressük meg a socketId-t a név alapján
-    const targetId = Object.keys(users).find(id => users[id].name === data.receiverName);
-    if(!targetId) return;
+    // Keressük a user socketjét
+    const targetSocketEntry = Object.values(users).find(u => u.name === data.receiverName && u.userType === 'user');
+    if(!targetSocketEntry) return;
 
+    const msg = { text: data.text, sender: 'admin', name: 'admin' };
+    chatHistory[data.receiverName].push(msg);
+
+    targetSocketEntry.socket.emit('chat_message', msg);
     console.log('Admin sends:', { text: data.text, receiverName: data.receiverName });
-    users[targetId].socket.emit('chat_message', { 
-      text: data.text, 
-      senderId: 'admin' 
-    });
   });
 
   // Admin csatlakozás
   socket.on('register_admin', () => {
     users[socket.id] = { socket, userType: 'admin', name: 'admin' };
     console.log('Admin connected: ' + socket.id);
-    
-    // Adminnak küldjük az aktuális felhasználókat
+
+    // Aktív user lista és chat history küldése
     const activeUsers = Object.values(users)
-      .filter(u => u.userType==='user')
-      .map(u => ({ name: u.name }));
+      .filter(u => u.userType === 'user')
+      .map(u => u.name);
+
+    // Aktív user lista
     socket.emit('active_users_list', activeUsers);
+
+    // Minden user chat history küldése az adminnak
+    for(let name of activeUsers){
+      if(chatHistory[name] && chatHistory[name].length > 0){
+        chatHistory[name].forEach(msg => socket.emit('chat_message', msg));
+      }
+    }
   });
 
   socket.on('disconnect', () => {
     const user = users[socket.id];
-    if(user) console.log(`${user.userType} disconnected: ${user.name || socket.id}`);
-    
-    // Adminoknak jelezzük a disconnectet
-    for (let id in users) {
-      if(users[id].userType === 'admin' && user?.userType === 'user'){
-        users[id].socket.emit('user_disconnected', { name: user.name });
+    if(user) console.log(`${user.userType} disconnected: ${user.name}`);
+
+    // Adminoknak jelezzük, ha user disconnect
+    if(user?.userType === 'user'){
+      for(let id in users){
+        if(users[id].userType === 'admin'){
+          users[id].socket.emit('user_disconnected', { name: user.name });
+        }
       }
     }
 
