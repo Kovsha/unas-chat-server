@@ -14,17 +14,18 @@ let chatHistory = {};
 io.on('connection', (socket) => {
   console.log('Socket connected: ' + socket.id);
 
-  // User regisztráció névvel
+  // Felhasználó regisztráció névvel
   socket.on('register_user', (data) => {
-    const name = data.name || socket.id;
+    const name = data.name?.trim() || `User-${socket.id.substring(0,5)}`;
     users[socket.id] = { socket, userType: 'user', name };
     if(!chatHistory[name]) chatHistory[name] = [];
     console.log(`User registered: ${name} (${socket.id})`);
 
     // Adminoknak küldjük az új aktív usert
-    for (let id in users) {
+    for(let id in users){
       if(users[id].userType === 'admin'){
         users[id].socket.emit('active_users', { name });
+        // Az új user chat előzménye üres, de ha volt volna, itt küldhetnénk
       }
     }
   });
@@ -40,26 +41,25 @@ io.on('connection', (socket) => {
     console.log('Message from user:', msg);
 
     // Küldés minden adminnak
-    for (let id in users) {
+    for(let id in users){
       if(users[id].userType === 'admin'){
         users[id].socket.emit('chat_message', msg);
       }
     }
   });
 
-  // Admin üzenet kiválasztott usernek
+  // Admin üzenet egy kiválasztott usernek
   socket.on('admin_message', (data) => {
-    if(!data.receiverName || !users) return;
+    if(!data.receiverName || !data.text) return;
 
-    // Keressük a user socketjét
-    const targetSocketEntry = Object.values(users).find(u => u.name === data.receiverName && u.userType === 'user');
-    if(!targetSocketEntry) return;
+    const target = Object.values(users).find(u => u.userType==='user' && u.name===data.receiverName);
+    if(!target) return;
 
     const msg = { text: data.text, sender: 'admin', name: 'admin' };
     chatHistory[data.receiverName].push(msg);
 
-    targetSocketEntry.socket.emit('chat_message', msg);
-    console.log('Admin sends:', { text: data.text, receiverName: data.receiverName });
+    target.socket.emit('chat_message', msg);
+    console.log('Admin sends:', msg, 'to', data.receiverName);
   });
 
   // Admin csatlakozás
@@ -67,19 +67,13 @@ io.on('connection', (socket) => {
     users[socket.id] = { socket, userType: 'admin', name: 'admin' };
     console.log('Admin connected: ' + socket.id);
 
-    // Aktív user lista és chat history küldése
-    const activeUsers = Object.values(users)
-      .filter(u => u.userType === 'user')
-      .map(u => u.name);
-
     // Aktív user lista
+    const activeUsers = Object.values(users).filter(u => u.userType==='user').map(u => u.name);
     socket.emit('active_users_list', activeUsers);
 
-    // Minden user chat history küldése az adminnak
+    // Minden user chat history küldése
     for(let name of activeUsers){
-      if(chatHistory[name] && chatHistory[name].length > 0){
-        chatHistory[name].forEach(msg => socket.emit('chat_message', msg));
-      }
+      chatHistory[name]?.forEach(msg => socket.emit('chat_message', msg));
     }
   });
 
